@@ -92,11 +92,14 @@ class ServerHarness:
         pass
 
     def conv_to_dictkey(self, input_message: List[Dict[str, str]]) -> str:
-        dictkey = list()
-        for item in input_message:
-            dictkey.append(f"role:{item['role']}")
-            dictkey.append(f"content:{item['content']}")
-        return "\n".join(dictkey)
+        # Use list comprehension for faster looping and f-string formatting
+        items = input_message
+        # Avoid repeated method lookups, prebind join for speed
+        join_str = "\n".join
+        result_list = [
+            f"role:{item['role']}\ncontent:{item['content']}" for item in items
+        ]
+        return join_str(result_list)
 
     async def update_weight(self, weight):
         pass
