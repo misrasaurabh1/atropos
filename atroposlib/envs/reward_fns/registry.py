@@ -1,6 +1,8 @@
 import importlib
+import importlib.util
 import inspect
 import logging
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Set, Type, Union
 
@@ -146,51 +148,64 @@ class RewardRegistry:
             ImportError: If the reward function file is not found or can't be loaded
         """
         try:
-            # Try different file name patterns
-            base_name = name
-            if name.endswith("_reward"):
-                base_name = name[:-7]  # Remove "_reward" suffix
-
-            module_paths = [
-                self._reward_fns_dir / f"{base_name}.py",
-                self._reward_fns_dir / f"{base_name}_reward.py",
-                self._reward_fns_dir / f"{name}.py",
-            ]
-
+            # Branch off handling base_name only once
+            base_name = name[:-7] if name.endswith("_reward") else name
+            reward_dir_str = str(self._reward_fns_dir)
+            py = ".py"
+            module_candidates = (
+                (f"{base_name}{py}", base_name),
+                (f"{base_name}_reward{py}", f"{base_name}_reward"),
+                (f"{name}{py}", name),
+            )
             module_path = None
-            for path in module_paths:
-                if path.exists():
-                    module_path = path
+            chosen_stem = None
+
+            # Check file existence as quickly as possible, using os.path.exists for speed
+            for fname, stem in module_candidates:
+                fpath = os.path.join(reward_dir_str, fname)
+                if os.path.exists(fpath):
+                    module_path = fpath
+                    chosen_stem = os.path.splitext(fname)[0]
                     break
 
-            if module_path is None:
+            if not module_path:
+                tries = ", ".join(
+                    os.path.join(reward_dir_str, fname)
+                    for fname, _ in module_candidates
+                )
                 raise ImportError(
-                    f"No reward function file found for {name} (tried {', '.join(str(p) for p in module_paths)})"
+                    f"No reward function file found for {name} (tried {tries})"
                 )
 
             # Generate a unique module name to avoid import conflicts
-            module_name = f"atroposlib.envs.reward_fns.{module_path.stem}"
-            spec = importlib.util.spec_from_file_location(module_name, str(module_path))
+            module_name = f"atroposlib.envs.reward_fns.{chosen_stem}"
+            spec = importlib.util.spec_from_file_location(module_name, module_path)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"Cannot import {module_path}")
+
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
 
-            # First try to find a class that inherits from RewardFunction
-            for obj_name, obj in inspect.getmembers(module):
+            # Try to find a class that inherits from RewardFunction first
+            reward_base = RewardFunction
+            isclass = inspect.isclass
+            getmembers = inspect.getmembers
+
+            # Stop at first suitable class to avoid scanning entire module unnecessarily
+            for obj_name, obj in getmembers(module):
                 if (
-                    inspect.isclass(obj)
-                    and issubclass(obj, RewardFunction)
-                    and obj is not RewardFunction
+                    isclass(obj)
+                    and issubclass(obj, reward_base)
+                    and obj is not reward_base
                 ):
-                    # Register the class with the requested name
-                    # This ensures it's accessible by the name the test expects
                     self.register_function(name, obj)
                     return
 
-            # If no class found, look for functions with matching name patterns
-            func_patterns = [f"{base_name}", f"{base_name}_reward", "format_reward"]
-            for func_name in func_patterns:
+            # Check function fallback only if no class is found
+            attr = getattr
+            for func_name in (base_name, f"{base_name}_reward", "format_reward"):
                 if hasattr(module, func_name):
-                    self.register_function(name, getattr(module, func_name))
+                    self.register_function(name, attr(module, func_name))
                     return
 
             raise AttributeError(f"No reward function found in {module_path}")
