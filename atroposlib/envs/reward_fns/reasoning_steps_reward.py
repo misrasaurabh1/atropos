@@ -47,31 +47,33 @@ class ReasoningStepsReward(RewardFunction):
         self.min_steps = min_steps
         self.base_score = base_score
 
-        # Default pattern weights
         self.pattern_weights = {
-            "numbered_steps": 0.5,  # Strong indicators
-            "list_numbers": 0.5,  # Strong indicators
-            "bullet_points": 0.4,  # Medium indicators
-            "transition_words": 0.3,  # Weaker indicators
+            "numbered_steps": 0.5,
+            "list_numbers": 0.5,
+            "bullet_points": 0.4,
+            "transition_words": 0.3,
         }
-
-        # Override with custom weights if provided
         if pattern_weights:
             self.pattern_weights.update(pattern_weights)
 
-        # Patterns for different types of step indicators
-        self.patterns = {
-            # Step 1: style numbered steps
-            "numbered_steps": r"Step\s+\d+[\s:]+",
-            # Numbered lists (1., 2., etc.)
-            "list_numbers": r"(?:^|\n)\s*\d+\.\s+",
-            # Bullet points
-            "bullet_points": r"(?:^|\n)\s*[\-\*•]\s+",
-            # Sequential transition words - expanded to include more phrases
-            "transition_words": r"\b(?:First|Second|Third|Fourth|Fifth|Next|Then|Finally|"
-            r"Subsequently|Afterward|Lastly|Initially|To begin|Let\'s begin|"
-            r"I\'ll first|After that|In conclusion|Eventually|Subsequently|"
-            r"To solve|begin by|understand|analyze|apply|compute)\b",
+        # Pre-compile regex patterns for efficiency
+        self.compiled_patterns = {
+            "numbered_steps": re.compile(
+                r"Step\s+\d+[\s:]+", re.IGNORECASE | re.MULTILINE
+            ),
+            "list_numbers": re.compile(
+                r"(?:^|\n)\s*\d+\.\s+", re.IGNORECASE | re.MULTILINE
+            ),
+            "bullet_points": re.compile(
+                r"(?:^|\n)\s*[\-\*•]\s+", re.IGNORECASE | re.MULTILINE
+            ),
+            "transition_words": re.compile(
+                r"\b(?:First|Second|Third|Fourth|Fifth|Next|Then|Finally|"
+                r"Subsequently|Afterward|Lastly|Initially|To begin|Let\'s begin|"
+                r"I\'ll first|After that|In conclusion|Eventually|Subsequently|"
+                r"To solve|begin by|understand|analyze|apply|compute)\b",
+                re.IGNORECASE | re.MULTILINE,
+            ),
         }
 
     def compute(self, completions: List[Any], **kwargs) -> List[float]:
@@ -85,41 +87,46 @@ class ReasoningStepsReward(RewardFunction):
         Returns:
             List of reward scores between 0.0 and 1.0
         """
-        # Extract content from different possible formats
-        completion_contents = [
-            self.get_content(completion) for completion in completions
-        ]
+        get_content = self.get_content
+        min_steps = self.min_steps
+        base_score = self.base_score
+        min_words = self.min_words
+        pattern_weights = self.pattern_weights
+        compiled_patterns = self.compiled_patterns
+
+        # Extract content outside the main scoring loop for speed
+        completion_contents = [get_content(completion) for completion in completions]
 
         rewards = []
         for content in completion_contents:
             score = 0.0
-            pattern_matches = {}
+            # Check matches for each pattern type
+            for pattern_type, pattern in compiled_patterns.items():
+                match_count = len(pattern.findall(content))
+                weight = pattern_weights.get(pattern_type, 0.3)
+                score += min(1.0, match_count / min_steps) * weight
 
-            # Check for each type of pattern
-            for pattern_type, pattern in self.patterns.items():
-                matches = re.findall(pattern, content, re.IGNORECASE | re.MULTILINE)
-                pattern_matches[pattern_type] = len(matches)
-
-                # Add score based on matches and pattern weight
-                weight = self.pattern_weights.get(
-                    pattern_type, 0.3
-                )  # Default weight if not specified
-                score += min(1.0, len(matches) / self.min_steps) * weight
-
-            # Add a small base score for any content that has more than just an answer
-            # This helps differentiate minimal reasoning from no reasoning
-            if len(content.split()) > self.min_words:
-                score += self.base_score
+            # Fast word count check for base score
+            if self._fast_word_count(content) > min_words:
+                score += base_score
 
             # Cap the total score at 1.0
-            score = min(1.0, score)
-            rewards.append(score)
-
-            logger.info(
-                f"Reasoning steps reward for completion: {pattern_matches}, score: {score}"
-            )
+            rewards.append(min(1.0, score))
 
         return rewards
+
+    @staticmethod
+    def _fast_word_count(text: str) -> int:
+        # Count words using a simple fast method (splitting on whitespace-like chars, avoiding regex overhead)
+        count = 0
+        in_word = False
+        for c in text:
+            if c.isspace():
+                in_word = False
+            elif not in_word:
+                count += 1
+                in_word = True
+        return count
 
 
 # Legacy function for backward compatibility
