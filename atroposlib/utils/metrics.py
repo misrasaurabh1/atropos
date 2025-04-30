@@ -12,8 +12,9 @@ def get_std_min_max_avg(name: str, data: list, metrics_dict: dict) -> dict:
     Returns:
         dict: A dictionary containing the standard deviation, minimum, maximum, and average.
     """
-    metrics_dict[f"{name}_mean"] = np.mean(data)
-    metrics_dict[f"{name}_std"] = np.std(data)
-    metrics_dict[f"{name}_max"] = np.max(data)
-    metrics_dict[f"{name}_min"] = np.min(data)
+    arr = np.asarray(data)  # Convert to array once for better performance
+    metrics_dict[f"{name}_mean"] = arr.mean()
+    metrics_dict[f"{name}_std"] = arr.std()
+    metrics_dict[f"{name}_max"] = arr.max()
+    metrics_dict[f"{name}_min"] = arr.min()
     return metrics_dict
