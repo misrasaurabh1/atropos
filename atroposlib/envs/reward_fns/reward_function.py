@@ -64,18 +64,40 @@ class RewardFunction(ABC):
 
     def log_metrics(self, raw_rewards: List[float], weighted_rewards: List[float]):
         """Log reward metrics to WandB"""
-        if not self.wandb_logger or not raw_rewards:
+        # Move all checks to a single branch for early return
+        wandb_logger = self.wandb_logger
+        if wandb_logger is None or not raw_rewards:
             return
 
+        name = self.name  # local var for speed & shorter strings
+        rw_len = len(raw_rewards)
+        wr_len = len(weighted_rewards)
+
+        # Manual aggregation (only one traversal)
+        rw_sum = 0.0
+        rw_min = float("inf")
+        rw_max = float("-inf")
+        for r in raw_rewards:
+            rw_sum += r
+            if r < rw_min:
+                rw_min = r
+            if r > rw_max:
+                rw_max = r
+
+        wr_sum = 0.0
+        for wr in weighted_rewards:
+            wr_sum += wr
+
+        # Format keys efficiently (avoid repeated string interpolation)
+        prefix = f"reward/{name}/"
         metrics = {
-            f"reward/{self.name}/mean_raw": sum(raw_rewards) / len(raw_rewards),
-            f"reward/{self.name}/mean_weighted": sum(weighted_rewards)
-            / len(weighted_rewards),
-            f"reward/{self.name}/min": min(raw_rewards),
-            f"reward/{self.name}/max": max(raw_rewards),
+            prefix + "mean_raw": rw_sum / rw_len,
+            prefix + "mean_weighted": wr_sum / wr_len if wr_len else 0.0,
+            prefix + "min": rw_min,
+            prefix + "max": rw_max,
         }
 
-        self.wandb_logger.log(metrics)
+        wandb_logger.log(metrics)
 
     @staticmethod
     def get_content(completion: Any) -> str:
@@ -123,3 +145,12 @@ class RewardFunction(ABC):
 
         # If no assistant content found, return empty string
         return ""
+
+    @property
+    def name(self) -> str:
+        # Avoid recomputation; cached property pattern.
+        n = self._name
+        if n is not None:
+            return n
+        # Could fallback to class name or other logic if needed
+        return self.__class__.__name__
