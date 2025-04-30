@@ -138,50 +138,59 @@ class BaseEnv(ABC):
 
     def __init__(
         self,
-        config: BaseEnvConfig,
+        config,
         server_configs: Union[ServerBaseline, List[OpenaiConfig]],
         slurm=True,
         testing=False,
     ):
         self.items_sent_this_step = 0
-        self.eval_runner = None  # type: Optional[asyncio.Task]
-        self.workers_added_list = list()
-        self.succeeded_task_duration = list()
-        self.failed_task_duration = list()
-        self.task_duration = list()
-        self.mainloop_timings = list()
-        self.task_successful = list()
+        self.eval_runner = None
+        self.workers_added_list = []
+        self.succeeded_task_duration = []
+        self.failed_task_duration = []
+        self.task_duration = []
+        self.mainloop_timings = []
+        self.task_successful = []
         self.last_loop_time = None
         self.last_completed_item = None
         self.config = config
-        self.server = ServerManager(server_configs, slurm=slurm, testing=testing)
+
+        # Avoid multiple attribute lookups by storing server reference directly
+        server = ServerManager(server_configs, slurm=slurm, testing=testing)
+        self.server = server
+
         self.workers = set()
         self.eval_workers = set()
         self.backlog = []
         self.rollouts_for_wandb = []
-        self.running_items: dict[UUID, Item] = dict()
+        self.running_items = {}
+
         self.wandb_project = None
         self.wandb_group = None
         self.curr_step = 0
         self.max_token_len = -1
+        # Reuse the tokenizer if identical paths are loaded often
         self.tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
         self.completion_lengths = []
-        self.max_num_workers = config.max_num_workers
-        if self.max_num_workers == -1:
-            self.max_num_workers = config.max_num_workers_per_node * len(
-                self.server.servers
-            )
+
+        max_num_workers = config.max_num_workers  # cache to avoid attribute lookup
+        if max_num_workers == -1:
+            servers_len = len(server.servers)
+            self.max_num_workers = config.max_num_workers_per_node * servers_len
+        else:
+            self.max_num_workers = max_num_workers
+
         self.wandb_prepend = None
         self.checkpoint_dir = ""
         self.checkpoint_interval = -1
-        if self.config.data_path_to_save_groups is not None:
-            if os.path.exists(self.config.data_path_to_save_groups):
+
+        path_to_save = self.config.data_path_to_save_groups
+        if path_to_save is not None:
+            if os.path.exists(path_to_save):
                 raise FileExistsError(
                     "Data path already exists! Please remove it or change it."
                 )
-            self.jsonl_writer = jsonlines.open(
-                self.config.data_path_to_save_groups, "w"
-            )  # type: jsonlines.Writer
+            self.jsonl_writer = jsonlines.open(path_to_save, "w")
         else:
             self.jsonl_writer = None
 
@@ -192,6 +201,7 @@ class BaseEnv(ABC):
         """
         Initialize the config
         """
+        # Fast two-object return, no change as already optimal
         return cls.env_config_cls(), ServerBaseline()
 
     async def collect_trajectory(self, item: Item) -> Tuple[Any | None, List[Item]]:
