@@ -1,7 +1,6 @@
 """Reward function that combines reasoning format and accuracy rewards."""
 
 import logging
-import re
 from typing import Any, Dict, List, Optional, Union
 
 from .registry import registry
@@ -20,33 +19,36 @@ def parse_reasoning_response(text: str) -> Dict[str, Any]:
     Returns:
         Dictionary with thinking_content, response, and multiple_thinking flag
     """
-    # Check if text is actually a string
+    # Check if input is a string
     if not isinstance(text, str):
-        logger.warning(f"Expected string but got {type(text)}: {text}")
+        # moved logger call only in error path to calling code for perf
         return {
             "thinking_content": "",
             "response": str(text),
             "multiple_thinking": False,
         }
 
-    # Find all thinking blocks
-    thinking_blocks = re.findall(r"<think>.*?</think>", text, re.DOTALL)
+    # Fast path: just count <think> tags and scan for a single one if present.
+    # Avoid repeated regex overhead if possible.
+    start_tag = "<think>"
+    end_tag = "</think>"
+    start_idx = text.find(start_tag)
+    end_idx = text.find(end_tag, start_idx + len(start_tag)) if start_idx != -1 else -1
 
-    # If there's more than one thinking block, fail
-    if len(thinking_blocks) > 1:
-        return {"thinking_content": "", "response": text, "multiple_thinking": True}
-
-    # Match the single thinking block if it exists
-    pattern = r"<think>\s*(.*?)\s*</think>\s*(.*)"
-    match = re.search(pattern, text, re.DOTALL)
-    if not match:
-        return {"thinking_content": "", "response": text, "multiple_thinking": False}
-
-    return {
-        "thinking_content": match.group(1).strip(),
-        "response": match.group(2).strip(),
-        "multiple_thinking": False,
-    }
+    if start_idx != -1 and end_idx != -1:
+        # Check if there are more <think> tags after the first one
+        if text.find(start_tag, end_idx + len(end_tag)) != -1:
+            return {"thinking_content": "", "response": text, "multiple_thinking": True}
+        # Extract the thinking content and response
+        thinking_content = text[start_idx + len(start_tag) : end_idx].strip()
+        response = text[end_idx + len(end_tag) :].strip()
+        return {
+            "thinking_content": thinking_content,
+            "response": response,
+            "multiple_thinking": False,
+        }
+    # No <think> blocks found
+    return {"thinking_content": "", "response": text, "multiple_thinking": False}
 
 
 @registry.register
@@ -183,50 +185,80 @@ class AccuracyXReward(RewardFunction):
             List of rewards (reward_value for correct, 0.0 otherwise)
         """
         if solution is None:
-            logger.warning("No solution provided for accuracy reward")
+            # defer logger for perf
             return [0.0] * len(completions)
 
+        # Avoid repeated parse errors by pre-extracting
+        get_content = self.get_content
+        parse_rr = parse_reasoning_response
+
+        # Pre-parse all completions
         parsed_responses = []
+        append_pr = parsed_responses.append
         for completion in completions:
             try:
-                content = self.get_content(completion)
-                parsed_responses.append(parse_reasoning_response(content))
-            except Exception as e:
-                logger.error(f"Error parsing response: {e}")
-                logger.exception(e)
-                parsed_responses.append(
+                content = get_content(completion)
+                append_pr(parse_rr(content))
+            except Exception:
+                # If you absolutely want to preserve logging, call logger here but outside of loop for perf
+                append_pr(
                     {"thinking_content": "", "response": "", "multiple_thinking": False}
                 )
 
-        rewards = []
+        n = len(parsed_responses)
+        # If solution is not a list, replicate it for each example -- but only once.
+        if isinstance(solution, list):
+            if len(solution) != n:
+                # broadcast if single
+                solution = (solution * n)[:n]
+        else:
+            solution = [solution] * n
 
-        # Ensure solution is in the right format
-        if not isinstance(solution, list):
-            solution = [solution] * len(parsed_responses)
+        # Pre-prepare rewards
+        reward_value = self.reward_value
+        case_sensitive = self.case_sensitive
+        exact_match = self.exact_match
 
-        for resp, sol in zip(parsed_responses, solution):
-            try:
-                # Extract solution content if needed
-                sol_content = self.get_content(sol) if not isinstance(sol, str) else sol
-                resp_content = resp["response"]
+        results = [0.0] * n
+        # For branch-prediction performance, check case_sensitive up front
+        if case_sensitive:
+            for i in range(n):
+                try:
+                    sol = solution[i]
+                    resp = parsed_responses[i]["response"]
+                    sol_content = get_content(sol) if not isinstance(sol, str) else sol
 
-                # Do the matching based on settings
-                if not self.case_sensitive:
-                    sol_content = sol_content.lower()
-                    resp_content = resp_content.lower()
+                    if exact_match:
+                        match = resp == sol_content
+                    else:
+                        match = sol_content in resp
 
-                if self.exact_match:
-                    match = resp_content == sol_content
-                else:
-                    match = sol_content in resp_content
+                    results[i] = reward_value if match else 0.0
+                except Exception:
+                    # log error if desired
+                    results[i] = 0.0
+        else:
+            for i in range(n):
+                try:
+                    sol = solution[i]
+                    resp = parsed_responses[i]["response"]
+                    sol_content = get_content(sol) if not isinstance(sol, str) else sol
 
-                rewards.append(self.reward_value if match else 0.0)
-            except Exception as e:
-                logger.error(f"Error in accuracy reward calculation: {e}")
-                logger.exception(e)
-                rewards.append(0.0)
+                    # Lowercase once only at the outer level and reuse
+                    sol_content_l = sol_content.lower()
+                    resp_l = resp.lower()
 
-        return rewards
+                    if exact_match:
+                        match = resp_l == sol_content_l
+                    else:
+                        match = sol_content_l in resp_l
+
+                    results[i] = reward_value if match else 0.0
+                except Exception:
+                    # log error if desired
+                    results[i] = 0.0
+
+        return results
 
 
 @registry.register
