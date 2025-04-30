@@ -22,13 +22,14 @@ def find_common_prefix(strings):
     if not strings:
         return ""
 
-    prefix = strings[0]
-    for s in strings[1:]:
-        while not s.startswith(prefix):
-            prefix = prefix[:-1]
-            if not prefix:
-                return ""
-    return prefix
+    # Find the shortest string (common prefix can't be longer than that)
+    shortest = min(strings, key=len)
+
+    for i, char in enumerate(shortest):
+        for s in strings:
+            if s[i] != char:
+                return shortest[:i]
+    return shortest
 
 
 async def register_to_api(group_size, max_token_len, api_url, num_steps):
