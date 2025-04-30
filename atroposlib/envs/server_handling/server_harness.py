@@ -65,16 +65,30 @@ def create_completion(
     :param finish_reason:
     :return:
     """
+    # Preprocess resp into a list to avoid repeated isinstance checks in the loop
+    if isinstance(resp, str):
+        resp_list = [resp] * n
+    else:
+        resp_list = resp
+
+    # Preprocess finish_reason into a list to avoid repeated isinstance checks in the loop
+    if isinstance(finish_reason, str):
+        finish_list = [finish_reason] * n
+    else:
+        finish_list = finish_reason
+
+    CompletionChoice_cls = CompletionChoice  # Local reference for faster access
+
+    # Use a list comprehension that indexes directly from lists
     choices = [
-        CompletionChoice(
-            finish_reason=(
-                finish_reason if isinstance(finish_reason, str) else finish_reason[i]
-            ),
+        CompletionChoice_cls(
+            finish_reason=finish_list[i],
             index=i,
-            text=resp if isinstance(resp, str) else resp[i],
+            text=resp_list[i],
         )
         for i in range(n)
     ]
+
     return Completion(
         id="test_id",
         created=0,
