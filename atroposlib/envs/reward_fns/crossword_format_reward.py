@@ -56,6 +56,14 @@ class CrosswordFormatReward(RewardFunction):
             ),  # Full response format
         ]
 
+        # Precompile answer extraction regex for efficiency
+        self._answer_regex = re.compile(
+            r"(?:Across|Down):\s+([A-Za-z]+)", re.IGNORECASE
+        )
+
+        # Use set for valid char lookup for O(1) checks
+        self._valid_chars_set = set(self.valid_chars)
+
     def compute(self, completions: List[Any], **kwargs) -> List[float]:
         """
         Check if completions follow crossword answer formatting.
@@ -67,35 +75,38 @@ class CrosswordFormatReward(RewardFunction):
         Returns:
             List of rewards (reward_value for correct format, 0.0 otherwise)
         """
-        # Extract content from different possible formats
-        completion_contents = [
-            self.get_content(completion) for completion in completions
-        ]
+        # Fast local variable/attribute resolution
+        format_patterns = self.format_patterns
+        penalize_invalid_chars = self.penalize_invalid_chars
+        valid_chars_set = self._valid_chars_set
+        answer_regex = self._answer_regex
+        reward_value = self.reward_value
 
         rewards = []
-        for content in completion_contents:
+        for completion in completions:
             try:
-                # Check for format patterns
+                content = self.get_content(completion)
+                # Check for format patterns : returns True if any matches
                 format_match = any(
-                    pattern.search(content) for pattern in self.format_patterns
+                    pattern.search(content) for pattern in format_patterns
                 )
 
-                # Look for answers and check for invalid characters
                 valid_chars = True
-                if self.penalize_invalid_chars:
+                if penalize_invalid_chars and format_match:
+                    # Only check for valid chars if pattern matches
                     # Extract answers (text after "Across:" or "Down:")
-                    answers = re.findall(
-                        r"(?:Across|Down):\s+([A-Za-z]+)", content, re.IGNORECASE
-                    )
-                    for answer in answers:
+                    for answer in answer_regex.findall(content):
                         # Check if answer contains only valid characters
-                        if not all(c.upper() in self.valid_chars for c in answer):
-                            valid_chars = False
+                        for c in answer:
+                            if c.upper() not in valid_chars_set:
+                                valid_chars = False
+                                break
+                        if not valid_chars:
                             break
 
                 # Both format and valid chars must be correct for full reward
                 correct_format = format_match and valid_chars
-                rewards.append(self.reward_value if correct_format else 0.0)
+                rewards.append(reward_value if correct_format else 0.0)
 
             except Exception as e:
                 logger.error(f"Error in crossword format reward calculation: {e}")
