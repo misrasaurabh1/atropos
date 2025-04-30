@@ -15,6 +15,7 @@ class RewardRegistry:
     def __init__(self):
         self._registry: Dict[str, Type[RewardFunction]] = {}
         self._reward_fns_dir = Path(__file__).parent
+        self._registry_keys = self._registry.keys()
 
     def register(self, cls=None, name=None):
         """
@@ -200,7 +201,7 @@ class RewardRegistry:
 
     def list_registered(self) -> List[str]:
         """Return list of all registered reward function names"""
-        return list(self._registry.keys())
+        return list(self._registry_keys)
 
     def load_required_functions(self, config) -> Set[str]:
         """
