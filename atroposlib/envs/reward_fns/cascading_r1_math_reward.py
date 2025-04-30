@@ -27,7 +27,11 @@ def get_completion_content(completion) -> str:
 
 def _normalize_numerical_value(value_str: str) -> float:
     """Convert a string representation of a number to float, handling formatting."""
-    return float(value_str.replace(",", "").strip())
+    # Avoid unnecessary str.strip() since float() already ignores leading/trailing whitespace
+    # Only replace comma if present to save time
+    if "," in value_str:
+        return float(value_str.replace(",", ""))
+    return float(value_str)
 
 
 def _extract_final_answer(text: str) -> str:
